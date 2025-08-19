@@ -1,13 +1,15 @@
 use std::fs;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
 pub fn read(path: &str) -> Result<CsvFile, String> {
+    // ファイルを比較
     let file = match File::open(path) {
         Ok(file) => file,
-        Err(e) => return Err(format!("ファイルの読み込みに失敗しました。{}", e)),
+        Err(e) => return Err(format!("openに失敗しました。{}", e)),
     };
 
+    // 1行ごとにファイルを読み込み、CsvFileを作成する
     let buffer = BufReader::new(file);
     let mut csv_header = CsvHeader::new();
     let mut csv_body = CsvBody::new();
@@ -35,15 +37,59 @@ pub fn read(path: &str) -> Result<CsvFile, String> {
     Ok(CsvFile::new(csv_header, csv_body))
 }
 
-pub fn write(path: &str) -> Result<(), String> {
-    let file= if !fs::exists(path).unwrap() {
-        File::create(path).unwrap()
+pub fn write(path: &str, csv_file: &CsvFile) -> Result<(), String> {
+    // 書き込みデータを生成する
+    let mut data: Vec<u8> = Vec::new();
+    // ヘッダーの処理
+    for name in &csv_file.csv_header.name {
+        data.extend(name.as_bytes());
+        data.push(',' as u8);
+    }
+    // 末尾の,は削除する
+    data.pop();
+    // 改行コードを挿入する
+    data.push('\n' as u8);
+
+    // データの処理
+    for row in &csv_file.csv_body.rows {
+        for csv_data in &row.data {
+            data.extend(csv_data.value.as_bytes());
+            data.push(',' as u8);
+        }
+        // 末尾の,は削除する
+        data.pop();
+        // 改行コードを挿入する
+        data.push('\n' as u8);
+    }
+
+    // 書き込み処理
+    // 対象のファイルがあるかを検証する
+    let exists = match fs::exists(path) {
+        Ok(value) => value,
+        Err(e) => return Err(format!("existsに失敗しました。[{}]", e)),
+    };
+    let file= if !exists {
+        // ファイルが存在しなかった場合、ファイルを生成する
+        match File::create(path) {
+            Ok(value ) => value,
+            Err(e) => return Err(format!("createに失敗しました。[{}]", e)),
+        }
     } else {
-        File::open(path).unwrap()
+        // ファイルが存在した場合、そのファイルを開く
+        match OpenOptions::new().write(true).open(path) {
+            Ok(value) => value,
+            Err(e) => return Err(format!("openに失敗しました。[{}]", e)),
+        }
     };
 
     let mut writer = BufWriter::new(file);
-    writer.flush().unwrap();
+
+    if let Err(e) = writer.write(&data) {
+        return Err(format!("writeに失敗しました。[{}]", e));
+    }
+    if let Err(e) = writer.flush() {
+        return Err(format!("flushに失敗しました。[{}]", e));
+    }
 
     Ok(())
 }
@@ -618,6 +664,72 @@ mod tests {
         }
     }
 
+    #[test]
+    fn read_csv_write_new_file() {
+        let mut csv = read("test/test2.csv").unwrap();
+
+        let data = vec![
+            String::from("いぬ海賊"),
+            String::from("海賊プリンセス"),
+            String::from("まがまが"),
+        ];
+
+        csv.update(1, data).unwrap();
+
+        write("test/test2-2.csv", &csv).unwrap();
+
+        let expect = [
+            ["ヘッダー1", "ヘッダー2", "ヘッダー3",],
+            ["いるかねこ", "船長うさぎ", "やかまし",],
+            ["いぬ海賊", "海賊プリンセス", "まがまが",],
+            ["いぬてんし", "おけぶろ", "すもっく"],
+        ];
+        let csv = read("test/test2-2.csv").unwrap();
+
+        assert_write_file(expect, csv);
+    }
+
+    #[test]
+    fn read_csv_write_over_write_file() {
+        let mut csv = read("test/test3.csv").unwrap();
+
+        let data = vec![
+            String::from("いぬ海賊"),
+            String::from("海賊プリンセス"),
+            String::from("まがまが"),
+        ];
+
+        csv.update(1, data).unwrap();
+
+
+        write("test/test3.csv", &csv).unwrap();
+
+        let expect = [
+            ["ヘッダー1", "ヘッダー2", "ヘッダー3",],
+            ["いるかねこ", "船長うさぎ", "やかまし",],
+            ["いぬ海賊", "海賊プリンセス", "まがまが",],
+            ["いぬてんし", "おけぶろ", "すもっく"],
+        ];
+        let csv = read("test/test3.csv").unwrap();
+
+        assert_write_file(expect, csv);
+    }
+
+    fn assert_write_file(expect: [[&str;3];4], csv: CsvFile) {
+        // ヘッダー部のテスト
+        for (index, name) in csv.get_header().name.iter().enumerate() {
+            assert_eq!(expect[0][index], name);
+        }
+
+        // データ部のテスト
+        for (index1, name) in csv.get_header().name.iter().enumerate() {
+            for index2 in 0..csv.get_body().len() {
+                let value = csv.get_value(name.as_str(), index2).unwrap();
+
+                assert_eq!(expect[index2 + 1][index1], value);
+            }
+        }
+    }
 
     fn make_csv_row() -> CsvRow {
         let mut row = CsvRow::new();
